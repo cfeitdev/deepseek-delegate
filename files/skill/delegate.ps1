@@ -14,7 +14,8 @@ $OutputEncoding = New-Object Text.UTF8Encoding $false
 [Console]::OutputEncoding = $OutputEncoding
 
 $exe         = '{{CLAUDE_EXE}}'
-$settings    = '{{GATEWAY_SETTINGS}}'
+# Settings for the delegated agent only: gateway URL, gateway key, every model slot on DeepSeek.
+$settings    = Join-Path $PSScriptRoot 'agent-settings.json'
 $startScript = '{{START_SCRIPT}}'
 $logDir      = '{{LOG_DIR}}'
 $model       = 'deepseek-v4.1-flash'

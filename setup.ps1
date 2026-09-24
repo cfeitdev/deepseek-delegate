@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Installs the deepseek-delegate skill and the local gateway it needs:
-  LiteLLM on 127.0.0.1:4000, opencode-filter.py on 127.0.0.1:4011, a gateway
-  settings file for terminal `claude`, and a `claude` function for PowerShell.
+  LiteLLM on 127.0.0.1:4000 and opencode-filter.py on 127.0.0.1:4011.
+  Claude Code itself keeps its default settings; only the skill's agent uses DeepSeek.
 
 .DESCRIPTION
   Uses YOUR OpenCode API key (asked for once, checked, then stored as the user
@@ -14,18 +14,11 @@
 
 .PARAMETER InstallRoot
   Where the files go (default: your user profile). Mainly for testing.
-.PARAMETER ProfilePath
-  PowerShell profile(s) to add the `claude` function to. Default: the Windows
-  PowerShell 5.1 profile, plus the PowerShell 7 profile if pwsh is installed.
-.PARAMETER SkipProfile
-  Don't touch any PowerShell profile.
 .PARAMETER SkipTest
   Don't start the gateway and send the end-to-end test request.
 #>
 param(
     [string]$InstallRoot = $env:USERPROFILE,
-    [string[]]$ProfilePath,
-    [switch]$SkipProfile,
     [switch]$SkipTest
 )
 $ErrorActionPreference = 'Stop'
@@ -160,7 +153,7 @@ $vars = [ordered]@{
     FILTER_PY        = Join-Path $logDir 'opencode-filter.py'
     LITELLM_CONFIG   = Join-Path $logDir 'litellm-config.yaml'
     START_SCRIPT     = Join-Path $claudeDir 'start-litellm.ps1'
-    GATEWAY_SETTINGS = Join-Path $claudeDir 'gateway-settings.json'
+    AGENT_SETTINGS   = Join-Path $skillDir 'agent-settings.json'
     DELEGATE_PS1     = Join-Path $skillDir 'delegate.ps1'
     MASTER_KEY       = $masterKey
 }
@@ -185,35 +178,25 @@ function Install-File($name, $dest, $kind) {
 Install-File 'opencode-filter.py'             $vars.FILTER_PY        'raw'
 Install-File 'litellm-config.yaml'            $vars.LITELLM_CONFIG   'raw'
 Install-File 'start-litellm.ps1'              $vars.START_SCRIPT     'ps'
-Install-File 'gateway-settings.template.json' $vars.GATEWAY_SETTINGS 'json'
+Install-File 'skill\agent-settings.template.json' $vars.AGENT_SETTINGS 'json'
 Install-File 'skill\delegate.ps1'             $vars.DELEGATE_PS1     'ps'
 Install-File 'skill\SKILL.md'                 (Join-Path $skillDir 'SKILL.md') 'raw'
-try { [IO.File]::ReadAllText($vars.GATEWAY_SETTINGS) | ConvertFrom-Json | Out-Null }
-catch { Fail "gateway-settings.json is not valid JSON: $_" }
+try { [IO.File]::ReadAllText($vars.AGENT_SETTINGS) | ConvertFrom-Json | Out-Null }
+catch { Fail "agent-settings.json is not valid JSON: $_" }
+# agent-settings.json holds the local gateway key; setup's backups of it would too.
+Get-ChildItem $skillDir -Filter 'agent-settings.json.bak-*' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
-# ---------------------------------------------------------------- profile
-if (-not $SkipProfile) {
-    Say 'Adding the `claude` function to your PowerShell profile(s)'
-    if (-not $ProfilePath) {
-        $docs = [Environment]::GetFolderPath('MyDocuments')
-        $ProfilePath = @(Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
-        if (Get-Command pwsh -ErrorAction SilentlyContinue) { $ProfilePath += Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1' }
-    }
-    $snippet = [IO.File]::ReadAllText((Join-Path $src 'profile-snippet.ps1'))
-    foreach ($k in 'CLAUDE_EXE', 'GATEWAY_SETTINGS') { $snippet = $snippet.Replace("{{$k}}", ([string]$vars[$k]).Replace("'", "''")) }
-    $block = '(?s)# >>> deepseek-delegate-kit: claude function >>>.*?# <<< deepseek-delegate-kit: claude function <<<\r?\n?'
-    foreach ($p in $ProfilePath) {
-        New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
-        $existing = if (Test-Path $p) { [IO.File]::ReadAllText($p) } else { '' }
-        if ($existing) { Copy-Item $p "$p.bak-$(Get-Date -Format yyyyMMdd-HHmmss)" -Force }
-        if ($existing -match $block) { $new = [regex]::Replace($existing, $block, { param($m) $snippet }) }
-        else { $new = $existing.TrimEnd() + $(if ($existing) { "`r`n`r`n" } else { '' }) + $snippet }
-        [IO.File]::WriteAllText($p, $new, $u8)
-        Ok $p
-    }
-    $policy = Get-ExecutionPolicy
-    if ($policy -in 'Restricted', 'AllSigned') {
-        Warn "your PowerShell execution policy is '$policy', so profiles don't load. To allow them for your user only: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+# ---------------------------------------------------------------- earlier versions
+# Earlier versions of this package also installed a terminal `claude` wrapper and an
+# opusplan settings file. Remove them so Claude Code runs on its defaults.
+$legacy = Join-Path $claudeDir 'gateway-settings.json'
+if (Test-Path $legacy) { Remove-Item -LiteralPath $legacy -Force; Ok "removed old $legacy" }
+$docs = [Environment]::GetFolderPath('MyDocuments')
+$block = '(?s)\r?\n?\r?\n?# >>> deepseek-delegate-kit: claude function >>>.*?# <<< deepseek-delegate-kit: claude function <<<\r?\n?'
+foreach ($p in (Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'), (Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1')) {
+    if ((Test-Path $p) -and ([IO.File]::ReadAllText($p) -match $block)) {
+        [IO.File]::WriteAllText($p, [regex]::Replace([IO.File]::ReadAllText($p), $block, ''), $u8)
+        Ok "removed the old claude function from $p"
     }
 }
 
@@ -238,8 +221,8 @@ if (-not $SkipTest) {
 
 Say 'Done'
 Write-Host @"
-  - Desktop app: start a new session and ask it to delegate something to DeepSeek.
-  - Terminal: open a NEW PowerShell window and run `claude` (opusplan through the gateway).
+  - Start a new Claude Code session (desktop or terminal) and ask it to delegate
+    something to DeepSeek, e.g. "delegate writing tests for utils.py to DeepSeek".
   - Logs: $logDir
   - Remove everything: powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 "@

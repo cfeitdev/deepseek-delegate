@@ -1,7 +1,7 @@
 # Starts the local LiteLLM gateway (127.0.0.1:4000) and the OpenCode header filter
-# (127.0.0.1:4011) if they aren't already running. Called by the SessionStart hook in
-# gateway-settings.json and by the deepseek-delegate skill. If the filter is down,
-# DeepSeek requests fail closed (connection refused) instead of reaching OpenCode unfiltered.
+# (127.0.0.1:4011) if they aren't already running. Called by the deepseek-delegate
+# skill's delegate.ps1. If the filter is down, DeepSeek requests fail closed
+# (connection refused) instead of reaching OpenCode unfiltered.
 param([int]$port = 4000, [int]$filterPort = 4011)
 $ErrorActionPreference = 'SilentlyContinue'
 $python = '{{PYTHON_EXE}}'

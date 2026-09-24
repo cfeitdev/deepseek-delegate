@@ -1,19 +1,9 @@
-# LiteLLM gateway for Claude Code (installed by deepseek-delegate-kit).
-# Keys are read from user environment variables; none are stored here.
+# LiteLLM gateway for the deepseek-delegate skill's agent. Only DeepSeek routes.
+# Never point api_base straight at OpenCode: LiteLLM would send any Claude login token
+# it receives there. 127.0.0.1:4011 is opencode-filter.py, which authenticates with
+# OPENCODE_API_KEY itself.
 
 model_list:
-  # Planning (opusplan) and explicit Opus use: your Claude subscription, via your own login.
-  - model_name: claude-opus-5-5
-    litellm_params:
-      model: anthropic/claude-opus-5-5
-
-  - model_name: claude-sonnet-5
-    litellm_params:
-      model: anthropic/claude-sonnet-5
-
-  # Execution, background tasks, auto-mode classifier and delegated agents: DeepSeek on OpenCode Go.
-  # Never point api_base straight at OpenCode: LiteLLM would send your Claude login token there.
-  # 127.0.0.1:4011 is opencode-filter.py, which authenticates with OPENCODE_API_KEY instead.
   - model_name: deepseek-v4.1-flash
     litellm_params:
       model: anthropic/deepseek-v4.1-flash
@@ -49,10 +39,3 @@ model_list:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-
-litellm_settings:
-  model_group_settings:
-    # Only these receive your Claude login token (they go to Anthropic).
-    forward_client_headers_to_llm_api:
-      - claude-opus-5-5
-      - claude-sonnet-5

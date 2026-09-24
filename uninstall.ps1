@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-  Removes what setup.ps1 installed: stops the gateway and filter, deletes the skill,
-  gateway files and logs, and takes the `claude` function out of your PowerShell profiles.
+  Removes what setup.ps1 installed: stops the gateway and filter and deletes the skill,
+  gateway files and logs. Also cleans up the terminal `claude` wrapper and opusplan
+  settings file that earlier versions of this package installed.
   Your keys stay in your user environment unless you pass -RemoveKeys.
 
     powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 [-RemoveKeys]
@@ -38,7 +39,7 @@ foreach ($t in $targets) {
 }
 if ((Test-Path $logDir) -and -not (Get-ChildItem $logDir -Force)) { Remove-Item -LiteralPath $logDir -Force }
 
-Write-Host '==> Removing the `claude` function from PowerShell profiles'
+Write-Host '==> Removing any `claude` function an earlier version added to PowerShell profiles'
 if (-not $ProfilePath) {
     $docs = [Environment]::GetFolderPath('MyDocuments')
     $ProfilePath = @((Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'),
