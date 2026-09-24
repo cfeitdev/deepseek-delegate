@@ -1,5 +1,6 @@
-# Runs one task on a headless Claude Code agent backed by deepseek-v4.1-flash
-# (local LiteLLM gateway -> opencode-filter.py -> OpenCode) and prints its result.
+# Runs one task on a headless Claude Code agent backed by the delegate model chosen at
+# setup (DeepSeek V4.1 Flash on OpenCode Go by default; any provider LiteLLM can reach)
+# and prints its result. Route: local LiteLLM gateway -> [header filter] -> provider.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File delegate.ps1 -PromptFile task.md [-WorkDir C:\proj] [-PermissionMode auto]
 #
@@ -14,23 +15,28 @@ $OutputEncoding = New-Object Text.UTF8Encoding $false
 [Console]::OutputEncoding = $OutputEncoding
 
 $exe         = '{{CLAUDE_EXE}}'
-# Settings for the delegated agent only: gateway URL, gateway key, every model slot on DeepSeek.
-$settings    = Join-Path $PSScriptRoot 'agent-settings.json'
 $startScript = '{{START_SCRIPT}}'
 $logDir      = '{{LOG_DIR}}'
-$model       = 'deepseek-v4.1-flash'
+# Settings for the delegated agent only: gateway URL, gateway key, every model slot on the delegate model.
+$settings    = Join-Path $PSScriptRoot 'agent-settings.json'
+# The gateway serves the chosen provider's model under these names; nothing else.
+$model       = 'delegate-model'
+$ourModels   = 'delegate-model', 'delegate-model[1m]', 'claude-opus-4-8', 'claude-opus-5'
+$provider    = Get-Content -Raw (Join-Path $logDir 'provider.json') | ConvertFrom-Json
 
 if (-not (Test-Path $PromptFile)) { Write-Output "delegate: prompt file not found: $PromptFile"; exit 2 }
 if (-not (Test-Path $WorkDir))    { Write-Output "delegate: work dir not found: $WorkDir"; exit 2 }
 
 # Desktop sessions export ANTHROPIC_BASE_URL=https://api.anthropic.com and other session
-# variables, which would override the gateway settings. Clear them for this process only.
+# variables, which would override the agent settings. Clear them for this process only.
 Get-ChildItem env: | Where-Object { $_.Name -match '^(ANTHROPIC|CLAUDE_CODE)' } |
     ForEach-Object { [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }
 
-# Make sure the gateway and the OpenCode header filter are running.
+# Make sure the gateway (and the header filter, if this provider uses it) is running.
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript | Out-Null
-foreach ($url in 'http://127.0.0.1:4011/health', 'http://127.0.0.1:4000/health/liveliness') {
+$urls = @('http://127.0.0.1:4000/health/liveliness')
+if ($provider.uses_filter) { $urls += 'http://127.0.0.1:4011/health' }
+foreach ($url in $urls) {
     try { Invoke-RestMethod $url -TimeoutSec 3 | Out-Null }
     catch { Write-Output "delegate: $url is not answering; see $logDir"; exit 3 }
 }
@@ -59,11 +65,11 @@ Remove-Item -LiteralPath $errFile -Force
 
 $models = @()
 if ($r.modelUsage) { $models = @($r.modelUsage.PSObject.Properties.Name) }
-$offModel = $models | Where-Object { $_ -notlike 'deepseek*' -and $_ -notin 'claude-opus-4-8', 'claude-opus-5' }
+$offModel = $models | Where-Object { $_ -notin $ourModels }
 $status = if ($r.is_error) { 'ERROR' } else { 'ok' }
-Write-Output ("[deepseek agent] status={0} turns={1} time={2}s models={3} session={4}" -f `
-    $status, $r.num_turns, [math]::Round($r.duration_ms / 1000), ($models -join ','), $r.session_id)
-if ($offModel) { Write-Output "[deepseek agent] WARNING: some steps ran on $($offModel -join ', '), not DeepSeek." }
+Write-Output ("[delegate agent] status={0} provider={1} model={2} turns={3} time={4}s session={5}" -f `
+    $status, $provider.provider, $provider.model, $r.num_turns, [math]::Round($r.duration_ms / 1000), $r.session_id)
+if ($offModel) { Write-Output "[delegate agent] WARNING: some steps asked for $($offModel -join ', '), which the gateway does not serve." }
 Write-Output ''
 Write-Output $r.result
 if ($r.is_error) { exit 1 }

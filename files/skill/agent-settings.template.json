@@ -2,9 +2,9 @@
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4000",
     "ANTHROPIC_AUTH_TOKEN": "{{MASTER_KEY}}",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4.1-flash",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "delegate-model",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "delegate-model",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "delegate-model",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "{{CONTEXT_TOKENS}}"
   }
 }

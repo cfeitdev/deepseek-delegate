@@ -1,17 +1,23 @@
-"""Header filter between LiteLLM and OpenCode.
+"""Header filter between LiteLLM and an Anthropic-compatible provider.
 
-LiteLLM's Anthropic provider replaces the configured api_key with the client's
-Anthropic OAuth token whenever one is present, which would send the Claude login
-to OpenCode. Every DeepSeek route points at this filter instead: it forwards only
-an allowlist of headers, always authenticates with OPENCODE_API_KEY, and streams
-the response back unchanged.
+Used when the delegate model is served over the Anthropic Messages API (OpenCode Go,
+or any other Anthropic-compatible endpoint). LiteLLM's Anthropic provider replaces
+the configured api_key with the client's Authorization token whenever one is present,
+so pointing it straight at a provider could hand that token over. This filter forwards
+only an allowlist of headers, always authenticates with the provider key itself, and
+streams the response back unchanged.
 
-It also rewrites the few Anthropic-only request features OpenCode rejects (see
-normalize_messages).
+It also rewrites the few Anthropic-only request features third-party endpoints reject
+(see normalize_messages).
 
-Usage: python opencode-filter.py [port] [upstream]
-Set OPENCODE_FILTER_DUMP=1 to save the latest failed request (conversation
-included) next to this file as last-failed-request.json, for debugging.
+Configuration: gateway-filter.json next to this file (written by setup.ps1):
+  {"upstream": "https://opencode.ai/zen/go", "auth_header": "x-api-key",
+   "key_env": "OPENCODE_API_KEY", "extra_headers": {"x-opencode-session": "..."}}
+auth_header is "x-api-key" or "authorization" (sent as "Bearer <key>").
+
+Usage: python gateway-filter.py [port]
+Set the user variable DELEGATE_FILTER_DUMP=1 to save the latest failed request
+(conversation included) next to this file as last-failed-request.json, for debugging.
 """
 import http.client
 import http.server
@@ -21,12 +27,12 @@ import sys
 import urllib.parse
 import winreg
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 4011
-UPSTREAM = urllib.parse.urlsplit(sys.argv[2] if len(sys.argv) > 2 else "https://opencode.ai/zen/go")
 
-# Only these request headers ever leave the machine. Anything else, including
-# authorization, cookies and x-litellm-*, is dropped.
-ALLOWED = {"content-type", "accept", "accept-encoding", "anthropic-version", "anthropic-beta", "x-opencode-session"}
+# Only these request headers from LiteLLM ever leave the machine. Anything else,
+# including authorization, cookies and x-litellm-*, is dropped.
+ALLOWED = {"content-type", "accept", "accept-encoding", "anthropic-version", "anthropic-beta"}
 
 
 def _user_env(name):
@@ -40,11 +46,20 @@ def _user_env(name):
     return value
 
 
-KEY = _user_env("OPENCODE_API_KEY")
+try:
+    with open(os.path.join(HERE, "gateway-filter.json"), encoding="utf-8") as f:
+        CONFIG = json.load(f)
+except FileNotFoundError:
+    sys.exit("gateway-filter: gateway-filter.json is missing; re-run setup.ps1")
+
+UPSTREAM = urllib.parse.urlsplit(CONFIG["upstream"])
+AUTH_HEADER = CONFIG.get("auth_header", "x-api-key").lower()
+EXTRA_HEADERS = CONFIG.get("extra_headers") or {}
+KEY = _user_env(CONFIG["key_env"])
 if not KEY:
-    sys.exit("opencode-filter: OPENCODE_API_KEY is not set")
-DUMP_FAILED = _user_env("OPENCODE_FILTER_DUMP") == "1"
-FAILED_DUMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-failed-request.json")
+    sys.exit("gateway-filter: %s is not set" % CONFIG["key_env"])
+DUMP_FAILED = _user_env("DELEGATE_FILTER_DUMP") == "1"
+FAILED_DUMP = os.path.join(HERE, "last-failed-request.json")
 
 
 def _blocks(content):
@@ -69,13 +84,13 @@ def _drop_patterns(schema):
 
 
 def normalize_messages(body):
-    """Rewrite Anthropic-only message features OpenCode rejects.
+    """Rewrite Anthropic-only message features third-party endpoints reject.
 
-    - role "system" messages inside `messages` (Claude Code's mid-conversation notices,
-      e.g. after plan approval) -> 400. They become <system-reminder> user text.
-    - redacted_thinking blocks in history -> 422. They are dropped.
-    - regex `pattern` keywords in tool schemas -> 400 (e.g. Artifact's "^[^\\0]*$").
-      They are dropped; Claude Code validates tool input itself.
+    - role "system" messages inside `messages` (Claude Code's mid-conversation notices)
+      -> they become <system-reminder> user text.
+    - redacted_thinking blocks in history -> dropped.
+    - regex `pattern` keywords in tool schemas (e.g. Artifact's "^[^\\0]*$") -> dropped;
+      Claude Code validates tool input itself.
     Consecutive same-role messages are then merged so user/assistant turns alternate.
     """
     try:
@@ -139,7 +154,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 headers[name] = ",".join(betas)
             else:
                 del headers[name]
-        headers["x-api-key"] = KEY
+        headers.update(EXTRA_HEADERS)
+        if AUTH_HEADER == "authorization":
+            headers["authorization"] = "Bearer " + KEY
+        else:
+            headers["x-api-key"] = KEY
+        headers.setdefault("user-agent", "deepseek-delegate-filter/1.0")
         headers["content-length"] = str(len(body))
 
         conn_cls = http.client.HTTPSConnection if UPSTREAM.scheme == "https" else http.client.HTTPConnection
@@ -165,7 +185,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
 
     def _relay_error(self, resp, request_body):
-        """Log OpenCode's error and the request's shape (no message content), then relay it."""
+        """Log the provider's error and the request's shape (no message content), then relay it."""
         data = resp.read()
         if DUMP_FAILED:
             with open(FAILED_DUMP, "wb") as f:  # local only, overwritten each time
@@ -179,7 +199,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shape["n_tools"] = len(req.get("tools", []))
         except Exception as e:
             shape = {"unparseable": str(e)}
-        sys.stderr.write("opencode-filter: UPSTREAM %d %s\n  request shape: %s\n"
+        sys.stderr.write("gateway-filter: UPSTREAM %d %s\n  request shape: %s\n"
                          % (resp.status, data[:2000].decode("utf-8", "replace"), json.dumps(shape)))
         self.send_response(resp.status)
         self.send_header("content-type", resp.getheader("content-type", "application/json"))
@@ -187,7 +207,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("opencode-filter: " + (fmt % args) + "\n")
+        sys.stderr.write("gateway-filter: " + (fmt % args) + "\n")
 
 
 http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

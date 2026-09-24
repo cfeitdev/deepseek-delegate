@@ -16,24 +16,26 @@ $ErrorActionPreference = 'Stop'
 $u8 = New-Object Text.UTF8Encoding $false
 $claudeDir = Join-Path $InstallRoot '.claude'
 $logDir    = Join-Path $InstallRoot '.litellm'
-$filterPy  = Join-Path $logDir 'opencode-filter.py'
-$config    = Join-Path $logDir 'litellm-config.yaml'
+$provider  = $null
+try { $provider = Get-Content -Raw (Join-Path $logDir 'provider.json') | ConvertFrom-Json } catch { }
 
 Write-Host '==> Stopping the gateway and filter started from this install'
+$ours = @((Join-Path $logDir 'gateway-filter.py'), (Join-Path $logDir 'opencode-filter.py'), (Join-Path $logDir 'litellm-config.yaml'))
 Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='litellm.exe' OR Name='cmd.exe'" |
-    Where-Object { $_.CommandLine -and ($_.CommandLine.Contains($filterPy) -or $_.CommandLine.Contains($config)) } |
+    Where-Object { $cl = $_.CommandLine; $cl -and ($ours | Where-Object { $cl.Contains($_) }) } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Write-Host "    stopped $($_.Name) $($_.ProcessId)" }
 
 Write-Host '==> Removing files'
 $targets = @(
     (Join-Path $claudeDir 'skills\deepseek-delegate'),
     (Join-Path $claudeDir 'start-litellm.ps1'),
-    (Join-Path $claudeDir 'gateway-settings.json'),
-    $filterPy, $config,
-    (Join-Path $logDir 'opencode-filter.log'), (Join-Path $logDir 'opencode-filter.log.prev'),
-    (Join-Path $logDir 'litellm-4000.log'), (Join-Path $logDir 'litellm-4000.log.prev'),
-    (Join-Path $logDir 'last-failed-request.json')
+    (Join-Path $claudeDir 'gateway-settings.json')
 )
+foreach ($n in 'gateway-filter.py', 'gateway-filter.json', 'opencode-filter.py', 'litellm-config.yaml', 'provider.json',
+               'gateway-filter.log', 'gateway-filter.log.prev', 'opencode-filter.log', 'opencode-filter.log.prev',
+               'litellm-4000.log', 'litellm-4000.log.prev', 'last-failed-request.json') {
+    $targets += Join-Path $logDir $n
+}
 foreach ($t in $targets) {
     if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force; Write-Host "    removed $t" }
 }
@@ -56,8 +58,9 @@ foreach ($p in $ProfilePath) {
 }
 
 if ($RemoveKeys) {
-    Write-Host '==> Removing OPENCODE_API_KEY and LITELLM_MASTER_KEY from your user environment'
-    [Environment]::SetEnvironmentVariable('OPENCODE_API_KEY', $null, 'User')
-    [Environment]::SetEnvironmentVariable('LITELLM_MASTER_KEY', $null, 'User')
+    $vars = @('LITELLM_MASTER_KEY')
+    if ($provider -and $provider.key_env) { $vars += $provider.key_env } else { $vars += 'OPENCODE_API_KEY' }
+    Write-Host "==> Removing $($vars -join ' and ') from your user environment"
+    foreach ($v in $vars) { [Environment]::SetEnvironmentVariable($v, $null, 'User') }
 }
 Write-Host '==> Done. Backups made by setup (*.bak-*) were left in place.'
